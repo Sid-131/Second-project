@@ -50,7 +50,11 @@ def _redact_names(text: str) -> str:
 # Prompt builder
 # ---------------------------------------------------------------------------
 
-_SYSTEM_PROMPT = """\
+def _get_system_prompt(run_date: str, theme_count: int) -> str:
+    # Create the dynamic list of themes
+    theme_bullets = "\n".join([f"{i+1}. **<Theme label>** — <one-sentence summary>" for i in range(theme_count)])
+    
+    return f"""\
 You are a senior product analyst writing a concise weekly pulse report.
 
 RULES (STRICT):
@@ -58,12 +62,10 @@ RULES (STRICT):
 2. Return ONLY Markdown — no code fences, no extra prose outside the note.
 3. Use EXACTLY this structure (do not rename the headings):
 
-# Weekly Pulse — {date}
+# Weekly Pulse — {run_date}
 
-## Top 3 Themes
-1. **<Theme label>** — <one-sentence summary>
-2. **<Theme label>** — <one-sentence summary>
-3. **<Theme label>** — <one-sentence summary>
+## Top Themes ({theme_count} selected)
+{theme_bullets}
 
 ## Real User Quotes
 > "<exact verbatim quote>" ⭐ <N>/5
@@ -124,6 +126,7 @@ def build_pulse_report(
     run_date: str,
     api_key: str | None = None,
     model: str | None = None,
+    topics: str | None = None,
 ) -> str:
     """
     Call Gemini to generate the weekly pulse Markdown note.
@@ -134,11 +137,35 @@ def build_pulse_report(
     run_date: ISO date string (YYYY-MM-DD) for the report header.
     api_key:  Gemini API key (falls back to GEMINI_API_KEY env var).
     model:    Gemini model name (falls back to GEMINI_MODEL env var).
+    topics:   Comma-separated list of topics to filter for (or 'all').
 
     Returns
     -------
     The generated Markdown string.
     """
+    # Override themes if topics are specified
+    if topics and topics.strip().lower() != "all":
+        req_topics = [t.strip().lower() for t in topics.split(",") if t.strip()]
+        filtered_themes = []
+        for t in report.get("themes", []):
+            label = t.get("label", "").lower()
+            slug = t.get("slug", "").lower()
+            if any(req in label or req in slug for req in req_topics):
+                filtered_themes.append(t)
+        
+        if filtered_themes:
+            report["themes"] = filtered_themes
+            logger.info("Filtered themes down to %d based on requested topics.", len(filtered_themes))
+        else:
+            logger.warning("No themes matched requested topics '%s'. Proceeding with top 3.", topics)
+            report["themes"] = report.get("themes", [])[:3]
+    else:
+        # Default behavior: slice down to top 3 if user says "all" or nothing, to respect budget 
+        # (Groq might give 5, but we only want a concise pulse). If they explicitly want all of them,
+        # we still restrict to mostly top ones to prevent context overflow, but let's say Top 3.
+        report["themes"] = report.get("themes", [])[:3]
+
+    theme_count = len(report.get("themes", []))
     api_key = api_key or os.getenv("GEMINI_API_KEY")
     model = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
@@ -151,21 +178,21 @@ def build_pulse_report(
     logger.info("Calling Gemini (%s) to generate weekly pulse report.", model)
     logger.info("Prompt length: %d chars.", len(user_prompt))
 
+    system_prompt = _get_system_prompt(run_date, max(1, theme_count))
     response = client.models.generate_content(
         model=model,
         contents=user_prompt,
         config=types.GenerateContentConfig(
-            system_instruction=_SYSTEM_PROMPT.replace("{date}", run_date),
+            system_instruction=system_prompt,
             temperature=0.4,
-            max_output_tokens=8192,  # raised from 1024 — previous limit caused truncation
+            max_output_tokens=8192,
         ),
     )
 
     markdown = response.text.strip()
 
     # Truncation guard — warn if any required section is missing
-    required_sections = ["## Top 3 Themes", "## Real User Quotes", "## Action Ideas"]
-    missing = [s for s in required_sections if s not in markdown]
+    missing = [s for s in ["## Top Themes", "## Real User Quotes", "## Action Ideas"] if s not in markdown]
     if missing:
         logger.warning(
             "Generated pulse is missing sections: %s. "

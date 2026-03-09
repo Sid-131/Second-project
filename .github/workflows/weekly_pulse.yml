@@ -1,0 +1,74 @@
+name: Weekly Pulse — App Review Insights Analyser
+
+on:
+  # Every Sunday at 3:35 PM IST = 10:05 AM UTC
+  schedule:
+    - cron: "5 10 * * 0"
+  # Allow manual trigger from GitHub Actions UI
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: "Phase to run (1 / 2 / 3 / 4 / all)"
+        required: false
+        default: "all"
+      send:
+        description: "Send email? (true / false)"
+        required: false
+        default: "true"
+
+jobs:
+  run-pipeline:
+    name: Run weekly pulse pipeline
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pipeline
+        env:
+          APP_ID: ${{ vars.APP_ID || 'com.nextbillion.groww' }}
+          WINDOW_WEEKS: "12"
+          MIN_WORD_COUNT: "5"
+          REVIEWS_DIR: data/reviews
+          REPORTS_DIR: data/reports
+          PULSE_DIR: data/pulse
+          LOG_LEVEL: INFO
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: llama-3.3-70b-versatile
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-2.5-flash
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          SMTP_HOST: smtp.gmail.com
+          SMTP_PORT: "587"
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: |
+          PHASE=${{ github.event.inputs.phase || 'all' }}
+          SEND_FLAG=${{ github.event.inputs.send || 'true' }}
+          if [ "$SEND_FLAG" = "true" ]; then
+            python main.py --phase "$PHASE" --send
+          else
+            python main.py --phase "$PHASE"
+          fi
+
+      - name: Upload pulse report as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulse-report-${{ github.run_id }}
+          path: |
+            data/pulse/pulse-*.md
+            data/pulse/pulse-*.txt
+            data/reports/grouped_reviews-*.json
+          retention-days: 30

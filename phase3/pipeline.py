@@ -45,6 +45,7 @@ def run(
     output_dir: str | None = None,
     api_key: str | None = None,
     model: str | None = None,
+    topics: str | None = None,
 ) -> tuple[Path, Path]:
     """
     Execute the Phase 3 pipeline.
@@ -56,6 +57,7 @@ def run(
     output_dir:    Directory for pulse files (default: data/pulse).
     api_key:       Gemini API key (falls back to env).
     model:         Gemini model name (falls back to env).
+    topics:        Comma-separated topics (or 'all').
 
     Returns
     -------
@@ -84,7 +86,7 @@ def run(
     run_date = date.today().isoformat()
 
     # --- Generate pulse markdown ---
-    markdown = build_pulse_report(report, run_date, api_key=api_key, model=model)
+    markdown = build_pulse_report(report, run_date, api_key=api_key, model=model, topics=topics)
 
     # --- Save outputs ---
     out_dir = Path(output_dir)
